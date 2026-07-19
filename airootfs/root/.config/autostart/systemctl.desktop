@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=networkmanager starter
+Comment=networkmanager
+Exec=systemctl restart NetworkManager
+Icon=calamares
+Terminal=false
+Categories=System;

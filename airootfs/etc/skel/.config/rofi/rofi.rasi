@@ -1,0 +1,43 @@
+* {
+    background-color: #1a1b26;
+    text-color:       #c0caf5;
+    border-color:     #7aa2f7;
+}
+
+window {
+    width:        700px;
+    border:       2px;
+    border-radius: 0px;
+    padding:      4px;
+}
+
+inputbar {
+    padding:      4px 8px;
+    background-color: #24283b;
+    text-color:   #7aa2f7;
+}
+
+prompt, entry {
+    background-color: #24283b;
+    text-color:       #7aa2f7;
+}
+
+listview {
+    padding:   2px 0;
+    spacing:   1px;
+    scrollbar: false;
+    lines:     5;
+}
+
+element {
+    padding: 3px 8px;
+}
+
+element selected {
+    background-color: #3d59a1;
+    text-color:       #c0caf5;
+}
+
+element-icon {
+    size: 16px;
+}

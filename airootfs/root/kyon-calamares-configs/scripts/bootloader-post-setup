@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+
+# See shell-setup for why this is needed: Calamares' shellprocess chroot
+# environment doesn't always populate PATH the way a normal login shell would.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH}"
+
+# $1 is the id from packagechooser_bootloader.conf: grub, limine, systemd-boot,
+# refind, refind-ai. Falls back to "limine" for backwards compatibility if the
+# chooser wasn't wired up / no selection was recorded.
+chosen_bootloader="${1:-limine}"
+
+cleanup_limine() {
+    # Remove leftover Limine bits brought over from the live image by unpackfs
+    # so they don't fight with whatever bootloader the user actually picked.
+    pacman -Qq limine &>/dev/null && pacman -R --noconfirm --nodeps \
+        limine-mkinitcpio-hook limine-entry-tool limine-snapper-sync limine 2>/dev/null
+    rm -f /etc/mkinitcpio.conf.d/10-limine-snapper-sync.conf
+    rm -f /etc/limine-snapper-sync.conf
+    rm -rf /boot/limine* /boot/EFI/BOOT/BOOTX64.EFI /boot/EFI/limine 2>/dev/null
+}
+
+case "$chosen_bootloader" in
+    limine)
+        limine_snapper_config="/etc/limine-snapper-sync.conf"
+
+        if [ -e "$limine_snapper_config" ]; then
+            sed -i 's/TARGET_OS_NAME=".*"/TARGET_OS_NAME="Kyon Linux"/' "$limine_snapper_config"
+
+            # It's NOT right, but we have no choice because the snapper setup doesn't
+            # work correctly at pacstrap step.
+            pacman -S --noconfirm --needed cachyos-snapper-support
+            systemctl enable limine-snapper-sync.service &>/dev/null
+        fi
+
+        # Replace limine-entry-tool with limine-mkinitcpio-hook to automate handling of
+        # new kernels. --overwrite is required because the base mkinitcpio hook file
+        # already owns this path and would otherwise conflict with the package.
+        pacman -R --noconfirm limine-entry-tool
+        if pacman -S --noconfirm --needed --overwrite '/etc/pacman.d/90-mkinitcpio-install.hook' limine-mkinitcpio-hook; then
+            if [ -e "$limine_snapper_config" ]; then
+                cat << 'EOF' > /etc/mkinitcpio.conf.d/10-limine-snapper-sync.conf
+# This hook is necessary for the proper loading of Limine snapshots.
+# Please do not touch unless you know what you are doing.
+HOOKS+=(sd-btrfs-overlayfs)
+EOF
+            fi
+
+            if command -v limine-update &>/dev/null; then
+                limine-update
+            else
+                echo "limine-update not found after install, skipping" >&2
+            fi
+        else
+            echo "limine-mkinitcpio-hook install failed, skipping Limine post-setup" >&2
+        fi
+        ;;
+
+    grub)
+        # Calamares' own "bootloader" job (earlier in the exec sequence) already
+        # ran grub-install + grub-mkconfig based on the packagechooser selection.
+        # We just need to make sure Limine (carried over from the live image via
+        # unpackfs) doesn't stick around and confuse the firmware boot entries.
+        echo "GRUB selected, cleaning up Limine remnants"
+        cleanup_limine
+        ;;
+
+    systemd-boot)
+        if pacman -Qq systemd-boot-manager 2>/dev/null && bootctl is-installed 2>/dev/null; then
+            echo "Enable systemd boot manager for automatic boot entry generation"
+            rm -rf /boot/loader/entries/*
+            sdboot-manage gen
+        fi
+        cleanup_limine
+        ;;
+
+    refind|refind-ai)
+        # Calamares' bootloader module installs rEFInd itself; just tidy up Limine.
+        cleanup_limine
+        ;;
+
+    *)
+        echo "Unknown bootloader choice '$chosen_bootloader', skipping post-setup" >&2
+        ;;
+esac

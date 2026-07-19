@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Redirect standard error to standard output since calamares doesn't
+# capture stderr
+exec 2>&1
+
+pacman-key --init
+
+# Update cachyos-keyring first since archlinux-keyring is taken from cachyos
+# repo. Also try to make multiple attempts in case of failures due to unsynced
+# mirrors.
+for ((i=0; i<5; i++)); do pacman -Sy --noconfirm --needed cachyos-keyring && break; done
+for ((i=0; i<5; i++)); do pacman -Sy --noconfirm --needed archlinux-keyring && break; done
+
+# chaotic-aur is enabled in pacman.conf without a TrustAll SigLevel override,
+# so its signing key must be trusted explicitly or every package pulled from
+# it fails signature verification (transaction aborts, error code 1).
+for ((i=0; i<5; i++)); do pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com && break; done
+pacman-key --lsign-key 3056513887B78AEB
+for ((i=0; i<5; i++)); do pacman -U --noconfirm --needed \
+    'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst' \
+    'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst' && break; done
+
+pacman-key --populate

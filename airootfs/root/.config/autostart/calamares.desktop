@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Kyon Linux Installer
+Comment=Launch Calamares Installer on boot
+Exec=calamares
+Icon=calamares
+Terminal=false
+Categories=System;

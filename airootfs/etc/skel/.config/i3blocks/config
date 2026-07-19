@@ -1,0 +1,18 @@
+separator=true
+separator_block_width=15
+markup=none
+
+[battery]
+command=~/.config/i3blocks/scripts/battery.sh
+interval=10
+color=#c0caf5
+
+[volume]
+command=vol=$(pactl get-sink-volume @DEFAULT_SINK@ | grep -oP '\d+%' | head -1); mute=$(pactl get-sink-mute @DEFAULT_SINK@ | grep -oP '(yes|no)'); [ "$mute" = "yes" ] && echo "🔇 muted" || echo " $vol"
+interval=1
+signal=10
+
+[datetime]
+command=date '+%a %d %b  %H:%M:%S'
+interval=1
+color=#c0caf5

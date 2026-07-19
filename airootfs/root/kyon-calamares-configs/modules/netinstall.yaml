@@ -1,0 +1,167 @@
+- name: "Optional NVIDIA Drivers"
+  description: "Proprietary NVIDIA drivers and utilities for dedicated GPUs"
+  hidden: false
+  selected: false
+  critical: true
+  packages:
+    - nvidia-dkms
+    - nvidia-utils
+    - nvidia-settings
+    - lib32-nvidia-utils
+    - egl-wayland
+
+- name: "KDE-Desktop"
+  description: "KDE-Plasma Desktop - Simple by default, powerful when needed."
+  hidden: false
+  selected: false
+  critical: true
+  packages:
+    - plasma-desktop
+    - sddm
+    - konsole
+    - dolphin
+    - plasma-nm
+    - plasma-pa
+    - kscreen
+    - powerdevil
+    - bluedevil
+
+- name: "GNOME-Desktop"
+  description: "GNOME desktop environment - designed to put you in control."
+  hidden: false
+  selected: false
+  critical: true
+  packages:
+    - gnome-shell
+    - gdm
+    - gnome-control-center
+    - ptyxis
+    - nautilus
+    - gnome-tweaks
+    - gnome-keyring
+    - networkmanager
+
+- name: "Hyprland + DMS"
+  description: "Hyprland dynamic tiling Wayland compositor configured with Dank Material Shell."
+  hidden: false
+  selected: false
+  critical: true
+  packages:
+    - hyprland
+    - dms-shell-git
+    - greetd
+    - quickshell
+    - kitty
+    - dolphin
+    - wayland-protocols
+    - xorg-xwayland
+    - xdg-desktop-portal-hyprland
+    - polkit-kde-agent
+    - thunar
+
+- name: "Niri + DMS"
+  description: "Niri scrollable-tiling Wayland compositor configured with Dank Material Shell."
+  hidden: false
+  selected: false
+  critical: true
+  packages:
+    - niri
+    - dms-shell-git
+    - greetd
+    - quickshell
+    - kitty
+    - wayland-protocols
+    - xorg-xwayland
+    - xdg-desktop-portal-gnome
+    - polkit-gnome
+    - thunar
+
+- name: "NVIDIA 340xx Drivers (Tesla Architecture)(x11 recommended)"
+  description: "Proprietary drivers for Tesla generation GPUs (GeForce 8/9/200/300 series) (use x11 (lxde lxqt xfce))"
+  hidden: false
+  selected: false
+  critical: false
+  packages:
+    - nvidia-340xx-dkms
+
+- name: "NVIDIA 390xx Drivers (Fermi Architecture)(x11 recommended)"
+  description: "Proprietary drivers for Fermi generation GPUs (GeForce 400/500 series) (use x11 (lxde lxqt xfce))"
+  hidden: false
+  selected: false
+  critical: false
+  packages:
+    - nvidia-390xx-dkms
+
+- name: "NVIDIA 470xx Drivers (Kepler Architecture)(x11 recommended)"
+  description: "Proprietary drivers for Kepler generation GPUs (GeForce 600/700 series) (use x11 (lxde lxqt xfce))"
+  hidden: false
+  selected: false
+  critical: false
+  packages:
+    - nvidia-470xx-dkms
+
+- name: "NVIDIA 580xx Drivers (Blackwell/Ada Architecture)"
+  description: "Proprietary drivers for modern NVIDIA architectures including Blackwell and Ada Lovelace"
+  hidden: false
+  selected: false
+  critical: false
+  packages:
+    - nvidia-580xx-dkms
+
+- name: "LXQt (x11)"
+  description: "Lightweight Qt-based desktop environment that keeps resource usage incredibly low (x11)"
+  hidden: false
+  selected: false
+  critical: false
+  packages:
+    - lxqt
+    - lxqt-panel
+    - pcmanfm-qt
+    - sddm
+
+- name: "LXDE (x11)"
+  description: "Classic ultra lightweight GTK desktop environment designed for absolute potato PCs (x11)"
+  hidden: false
+  selected: false
+  critical: false
+  packages:
+    - lxde
+    - lxde-common
+    - pcmanfm
+    - lxdm
+
+- name: "Xfce4 (x11)"
+  description: "Xfce is a lightweight and fast desktop environment. (x11)"
+  hidden: false
+  selected: false
+  critical: true
+  packages:
+    - xfce4
+    - xfce4-goodies
+    - lightdm
+    - lightdm-gtk-greeter
+    - xfce4-terminal
+    - network-manager-applet
+    - thunar-archive-plugin
+
+- name: "i3 (x11)"
+  description: "i3 is a lightweight tiling window manager"
+  hidden: false
+  selected: false
+  critical: true
+  packages:
+     - i3-wm
+     - i3blocks
+     - i3lock
+     - i3status
+     - alacritty
+     - kitty
+     - rofi
+     - thunar
+     - network-manager-applet
+     - xwallpaper
+     - sddm
+     - xrandr
+     - upower
+     - gnome-themes-extra
+     - fish

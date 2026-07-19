@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+# Calamares runs shellprocess commands in a minimal chroot environment where
+# PATH may not be fully populated, so set it explicitly rather than relying
+# on whatever the job's environment happens to provide.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH}"
+
+user="$1"
+
+# chsh ships in the "shadow" package; make sure it's actually present before
+# trying to use it.
+if ! command -v chsh &>/dev/null; then
+    pacman -S --noconfirm --needed shadow &>/dev/null
+fi
+
+for shell in 'fish' 'zsh'; do
+    if [ -e "/bin/$shell" ] && command -v chsh &>/dev/null; then
+        chsh -s "/bin/${shell}" "$user" && break
+    fi
+done
+
+# Don't fail the whole install just because no alternate shell was found or
+# chsh isn't available -- this step is a nice-to-have, not critical.
+exit 0

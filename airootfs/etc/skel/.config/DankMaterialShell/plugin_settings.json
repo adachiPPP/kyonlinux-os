@@ -1,0 +1,18 @@
+{
+  "cavaVisualizer": {
+    "enabled": true
+  },
+  "imageConverter": {
+    "enabled": true
+  },
+  "dankStickerSearch": {
+    "enabled": true
+  },
+  "dankKDEConnect": {
+    "enabled": true,
+    "selectedDeviceId": "10a84d06_3e63_423f_94f8_a3ce787e4554"
+  },
+  "dankGifSearch": {
+    "enabled": true
+  }
+}
