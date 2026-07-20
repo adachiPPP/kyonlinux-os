@@ -152,8 +152,8 @@
      - i3-wm
      - i3blocks
      - i3lock
-     - dunst
      - i3status
+     - dunst
      - alacritty
      - kitty
      - rofi
