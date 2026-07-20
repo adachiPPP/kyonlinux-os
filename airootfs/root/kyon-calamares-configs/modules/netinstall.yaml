@@ -128,7 +128,7 @@
     - lxde
     - lxde-common
     - pcmanfm
-    - lxdm
+    - sddm
 
 - name: "Xfce4 (x11)"
   description: "Xfce is a lightweight and fast desktop environment. (x11)"
@@ -138,8 +138,7 @@
   packages:
     - xfce4
     - xfce4-goodies
-    - lightdm
-    - lightdm-gtk-greeter
+    - sddm
     - xfce4-terminal
     - network-manager-applet
     - thunar-archive-plugin
@@ -153,6 +152,7 @@
      - i3-wm
      - i3blocks
      - i3lock
+     - dunst
      - i3status
      - alacritty
      - kitty
