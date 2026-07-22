@@ -138,7 +138,8 @@
   packages:
     - xfce4
     - xfce4-goodies
-    - sddm
+    - lightdm
+    - lightdm-gtk-greeter
     - xfce4-terminal
     - network-manager-applet
     - thunar-archive-plugin
