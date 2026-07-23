@@ -50,6 +50,7 @@
     - hyprland
     - dms-shell-git
     - greetd
+    - greetd-regreet
     - quickshell
     - kitty
     - dolphin
@@ -68,6 +69,7 @@
     - niri
     - dms-shell-git
     - greetd
+    - greetd-regreet
     - quickshell
     - kitty
     - wayland-protocols
