@@ -1,0 +1,616 @@
+#!/usr/bin/env bash
+
+# install-bootloader - installs the chosen bootloader into the target system.
+#
+# Runs INSIDE the Calamares chroot (dontChroot: false) at the point where the
+# old grubcfg + bootloader modules used to run: after the fstab module has
+# written /etc/fstab, after the packages module has installed the bootloader
+# packages, and after build_initramfs has built the initramfs images.
+#
+# WHY this script exists instead of this Calamares build's own "bootloader"
+# module (EndeavourOS fork 26.03.2.3):
+#   * the module has NO limine support at all: on UEFI, choosing limine hits
+#     the dispatch "combination not supported" and installs NOTHING;
+#   * on BIOS/CSM installs the dispatch is `elif efi_boot_loader == "grub"
+#     or fw_type != "efi": install_grub(...)`, so it FORCE-INSTALLS GRUB no
+#     matter what the user picked;
+#   * its grub-mkconfig step runs inside the chroot where grub-probe cannot
+#     resolve the root device, so the generated grub.cfg has an EMPTY root=
+#     and the first boot drops to the initramfs emergency shell
+#     ("ERROR: '' device did not show up after 30 seconds..."); and
+#   * its grubcfg module leaves GRUB_DISTRIBUTOR="Arch" in place, so the menu
+#     says "Arch Linux" instead of "Kyon Linux".
+# All of that is handled here instead, following the Arch Wiki procedures:
+#   grub:        grub-install (x86_64-efi / i386-pc) + grub-mkconfig
+#   limine:      BOOTX64.EFI on the ESP (UEFI) / limine bios-install (BIOS)
+#   systemd-boot:bootctl --esp-path=/boot install + loader entries
+#   refind:      refind-install --usedefault <esp>
+#
+# $1 is the chosen bootloader item id from global storage
+# "packagechooser_bootloader" (grub, limine, systemd-boot, refind, refind-ai).
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH}"
+
+LOG=/var/log/kyon-bootloader.log
+log()  { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
+warn() { log "WARNING: $*"; echo "WARNING: $*" >&2; }
+fail() { log "FATAL: $*"; echo "FATAL: $*" >&2; exit 1; }
+
+# The install steps below need sgdisk, parted, limine and efibootmgr INSIDE
+# the chroot. The live ISO has them in its own /usr, which the chroot cannot
+# see - only the target's packages. All four are on the target install list
+# (packages.conf), so this is normally a --needed no-op; it exists so the
+# script also works if the packages module was skipped or a config changed.
+# It must run before ensure_bios_boot() (which uses sgdisk/parted) and
+# before nvram_cleanup() (which uses efibootmgr).
+ensure_tools() {
+    local t out
+    out=$(pacman -S --noconfirm --needed gptfdisk parted limine efibootmgr 2>&1) || {
+        warn "could not ensure gptfdisk/parted/limine/efibootmgr in the target"
+        log "pacman output: ${out}"
+    }
+    for t in sgdisk parted limine efibootmgr; do
+        command -v "$t" >/dev/null 2>&1 || warn "$t is missing from the target system"
+    done
+}
+
+: > "$LOG"
+log "install-bootloader: start"
+
+choice="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+[ -n "$choice" ] || fail "no bootloader was selected (packagechooser_bootloader empty)"
+log "install-bootloader: choice=${choice}"
+
+if [ -d /sys/firmware/efi ]; then FW=efi; else FW=bios; fi
+log "install-bootloader: firmware=${FW}"
+
+ensure_tools
+
+# ---------------------------------------------------------------------------
+# 1. Kernel command line, from the target's /etc/fstab (Calamares writes it
+#    with UUIDs). The root device, btrfs subvolume and LUKS volumes are all
+#    derived here once, so every bootloader gets the SAME correct cmdline.
+# ---------------------------------------------------------------------------
+build_cmdline() {
+    local root_src root_opts subvol cmd
+    local crypt_name luks_dev luks_uuid
+    root_src=$(awk '$2 == "/" { print $1; exit }' /etc/fstab 2>/dev/null)
+    root_opts=$(awk '$2 == "/" { print $4; exit }' /etc/fstab 2>/dev/null)
+    case "$root_src" in
+        UUID=*|PARTUUID=*|/dev/mapper/*)
+            cmd="root=${root_src}"
+            ;;
+        /dev/*)
+            luks_uuid=$(blkid -s UUID -o value "$root_src" 2>/dev/null)
+            if [ -n "$luks_uuid" ]; then cmd="root=UUID=${luks_uuid}"; else cmd="root=${root_src}"; fi
+            ;;
+        *)
+            cmd="root=${root_src}"
+            ;;
+    esac
+    # btrfs subvolume root: mount the same subvolume fstab does (the default
+    # would be subvolid 5, which has no /etc or /usr).
+    subvol=$(printf '%s' ",${root_opts}," | sed -n 's/.*,\(subvol=[^,]*\),.*/\1/p')
+    if [ -n "$subvol" ]; then
+        cmd="${cmd} rootflags=${subvol}"
+    fi
+    # LUKS: kyon uses the classic mkinitcpio encrypt hook (initcpiocfg.conf,
+    # useSystemdHook: false), so the parameter is cryptdevice=UUID=<uuid>:<name>.
+    if [ -s /etc/crypttab ]; then
+        while read -r crypt_name luks_dev _; do
+            case "$crypt_name" in
+                ""|\#*) continue ;;
+            esac
+            case "$luks_dev" in
+                UUID=*) luks_uuid="${luks_dev#UUID=}" ;;
+                /dev/*) luks_uuid=$(blkid -s UUID -o value "$luks_dev" 2>/dev/null) ;;
+                *) luks_uuid="" ;;
+            esac
+            if [ -n "$luks_uuid" ]; then
+                cmd="${cmd} cryptdevice=UUID=${luks_uuid}:${crypt_name}"
+            fi
+        done < /etc/crypttab
+    fi
+    printf '%s rw quiet\n' "$cmd"
+}
+
+# Strip the partition number off a block device: sda2 -> sda, nvme0n1p2 -> nvme0n1.
+disk_of() {
+    local d="$1"
+    case "$d" in
+        /dev/nvme*|/dev/mmcblk*|/dev/loop*) echo "${d%p*}" ;;
+        *) echo "${d%[0-9]*}" ;;
+    esac
+}
+
+# The disk the OS is installed on (for BIOS grub-install / limine bios-install).
+# Calamares writes /etc/fstab with UUID= sources, so the device has to be
+# resolved via blkid/lsblk; LUKS roots (/dev/mapper/...) are resolved through
+# the backing device in /etc/crypttab. This is the piece the old
+# the old bootloader-post-setup got wrong (it only understood /dev/* sources).
+resolve_disk() {
+    local root_src d
+    root_src=$(awk '$2 == "/" { print $1; exit }' /etc/fstab 2>/dev/null)
+    case "$root_src" in
+        /dev/mapper/*)
+            local name dev u
+            while read -r name dev _; do
+                case "$name" in ""|\#*) continue ;; esac
+                case "$dev" in
+                    UUID=*) u=$(blkid -t "UUID=${dev#UUID=}" -o device 2>/dev/null | head -1) ;;
+                    /dev/*) u="$dev" ;;
+                    *) u="" ;;
+                esac
+                [ -n "$u" ] && { disk_of "$u"; return 0; }
+            done < /etc/crypttab
+            return 1
+            ;;
+        UUID=*|PARTUUID=*)
+            d=$(blkid -t "$root_src" -o device 2>/dev/null | head -1)
+            if [ -z "$d" ]; then
+                d=$(lsblk -l -o NAME,UUID 2>/dev/null | awk -v u="${root_src#*=}" '$2 == u { print "/dev/" $1; exit }')
+            fi
+            [ -n "$d" ] && { disk_of "$d"; return 0; }
+            return 1
+            ;;
+        /dev/*)
+            disk_of "$root_src"; return 0
+            ;;
+    esac
+    return 1
+}
+
+# The ESP device (UEFI installs only; kyon mounts the ESP at /boot).
+# Handles UUID=, PARTUUID= and plain /dev/* fstab sources; the lookup must
+# use the SAME key type the fstab entry used (blkid -t PARTUUID= never
+# matches a UUID= query and vice versa).
+resolve_esp_dev() {
+    local src prefix u d
+    src=$(awk '$2 == "/boot" { print $1; exit }' /etc/fstab 2>/dev/null)
+    case "$src" in
+        UUID=*)
+            prefix=UUID; u="${src#UUID=}" ;;
+        PARTUUID=*)
+            prefix=PARTUUID; u="${src#PARTUUID=}" ;;
+        /dev/*)
+            [ -b "$src" ] && { echo "$src"; return 0; }
+            return 1
+            ;;
+        *) return 1 ;;
+    esac
+    d=$(blkid -t "${prefix}=${u}" -o device 2>/dev/null | head -1)
+    [ -n "$d" ] || d=$(lsblk -l -o NAME,${prefix} 2>/dev/null | awk -v u="$u" '$2 == u { print "/dev/" $1; exit }')
+    [ -n "$d" ] && { echo "$d"; return 0; }
+    return 1
+}
+
+# BIOS/GPT installs: GRUB (i386-pc) and limine (bios-install) both REQUIRE a
+# small BIOS boot partition (bios_grub flag, ~1 MiB, type code EF02) on GPT
+# disks; on MBR disks the bootloader embeds in the post-MBR gap and nothing
+# extra is needed. NOTE: this Calamares build (3.3.10) NEVER creates the
+# bios_grub partition itself - 'Erase disk' now uses an MBR table on BIOS
+# machines for exactly this reason (see partition.conf). Manual partitioning
+# can still produce a GPT disk without one, which used to fail hard at the
+# very end of the install (limine: "no BIOS boot partition specified or
+# detected"). Check up front, auto-repair when there is free space, and
+# fail early with an actionable message otherwise.
+ensure_bios_boot() {
+    [ "$FW" = bios ] || return 0
+    local disk ptt
+    disk=$(resolve_disk) || fail "could not determine install disk for BIOS boot check"
+    ptt=$(blkid -s PTTYPE -o value "$disk" 2>/dev/null)
+    if [ "$ptt" != "gpt" ]; then
+        log "BIOS install on disk ${disk} (partition table: ${ptt:-unknown/none}): no BIOS boot partition needed"
+        return 0
+    fi
+    # Repair a stale/corrupt backup GPT header first: limine and GRUB both
+    # abort on it ("Secondary header not valid"), and parted may misbehave.
+    repair_gpt_backup "$disk"
+    # lsblk (util-linux, always present) reads the type from the partition
+    # entries; parted's flag column is the fallback for old GPT type names.
+    if lsblk -rno NAME,PARTTYPENAME "$disk" 2>/dev/null | grep -qi 'BIOS boot' \
+        || parted -s "$disk" print 2>/dev/null | grep -qi 'bios_grub'; then
+        log "BIOS boot partition found on ${disk}"
+        return 0
+    fi
+    if ! command -v parted >/dev/null 2>&1 || ! command -v sgdisk >/dev/null 2>&1; then
+        fail "parted/sgdisk are missing from the installer environment; cannot check or create the BIOS boot partition required on GPT disks"
+    fi
+    log "GPT disk ${disk} has no BIOS boot partition; attempting to create one (1 MiB, EF02)"
+    # NOTE: this runs in the chroot AFTER mount/unpackfs. The repair is safe
+    # because sgdisk -n 0:0:+1M only ever appends in free space at the end of
+    # the disk - it never touches the mounted partitions, and fstab / the
+    # bootloader resolve devices by UUID, so no partition numbering can shift.
+    if sgdisk -n 0:0:+1M -t 0:EF02 -c 0:"BIOS boot" "$disk" 2>>"$LOG"; then
+        partprobe "$disk" 2>/dev/null || true
+        log "created BIOS boot partition on ${disk}"
+        return 0
+    fi
+    fail "the target disk ${disk} is GPT but has no BIOS boot partition (bios_grub flag), and there is no free space left to create one. Go back to the partitioning page and either: (1) use 'Erase disk' - it now creates an MBR table on BIOS machines, which needs no extra partition; or (2) in manual mode, replace the partition table with MBR (msdos); or (3) add a 1 MiB partition with the 'bios_grub' flag (type code EF02) to the GPT layout."
+}
+
+# Some disks reach the bootloader step with a stale or corrupt GPT backup
+# (secondary) header - e.g. a disk that was resized, or that a previous
+# install attempt / partitioning tool left behind with a broken backup
+# table. limine bios-install validates the whole GPT and aborts with
+# "Secondary header not valid, aborting", and GRUB i386-pc can fail too.
+# sgdisk -e relocates the backup GPT data structures to the end of the
+# disk, regenerating them from the primary header. It never touches
+# partition contents, so it is safe to run while the target partitions are
+# mounted; on healthy disks it is a no-op. Idempotent and cheap, so it runs
+# unconditionally on GPT disks before any BIOS bootloader install.
+repair_gpt_backup() {
+    local disk="$1"
+    [ -b "$disk" ] || return 0
+    [ "$(blkid -s PTTYPE -o value "$disk" 2>/dev/null)" = "gpt" ] || return 0
+    # Never skip silently: a missing sgdisk must fail loudly with a clear
+    # path forward, not hand the user limine's cryptic abort later.
+    command -v sgdisk >/dev/null 2>&1 || \
+        fail "sgdisk is missing from the target; cannot repair the GPT on ${disk}. Install gptfdisk, or go back and use 'Erase disk' (MBR on BIOS machines needs no GPT repair)."
+    if sgdisk -e "$disk" 2>>"$LOG"; then
+        # sgdisk -v EXITS 0 even when it finds problems ("Identified N
+        # problems!"), so check its output, not the exit code.
+        if sgdisk -v "$disk" 2>&1 | grep -q 'No problems found'; then
+            partprobe "$disk" 2>/dev/null || true
+            log "GPT backup header relocated and verified on ${disk}"
+        else
+            fail "the GPT on ${disk} is still invalid after repair (sgdisk -v still reports problems). Go back to the partitioning page and either use 'Erase disk' (it now creates an MBR table on BIOS machines) or replace the partition table with MBR (msdos)."
+        fi
+    else
+        fail "could not repair the GPT on ${disk} (sgdisk -e failed). Go back to the partitioning page and either use 'Erase disk' (it now creates an MBR table on BIOS machines) or replace the partition table with MBR (msdos)."
+    fi
+}
+
+# All kernels present in the target (from mkinitcpio's pkgbase files).
+kernel_names() {
+    local f name
+    for f in /usr/lib/modules/*/pkgbase; do
+        [ -f "$f" ] || continue
+        name=$(<"$f")
+        [ -n "$name" ] || continue
+        [ -f "/boot/vmlinuz-${name}" ] || continue
+        printf '%s\n' "$name"
+    done
+}
+
+CMD="$(build_cmdline)"
+log "install-bootloader: cmdline=${CMD}"
+
+# ---------------------------------------------------------------------------
+# 2. Per-bootloader installation (Arch Wiki commands).
+# ---------------------------------------------------------------------------
+
+write_grub_default() {
+    # root= is pinned here because grub-mkconfig's 10_linux computes it via
+    # grub-probe, which cannot resolve the root device inside the chroot and
+    # would otherwise emit an EMPTY root=. 10_linux puts `root=` BEFORE the
+    # cmdline args, so our root= (in GRUB_CMDLINE_LINUX_DEFAULT) is the LAST
+    # one on the line and the kernel uses it. GRUB_DISTRIBUTOR='Kyon' makes
+    # the menu say "Kyon Linux" (10_linux appends " Linux").
+    {
+        echo "# Generated by Kyon Linux installer (install-bootloader)"
+        echo "GRUB_DEFAULT=0"
+        echo "GRUB_TIMEOUT=5"
+        echo "GRUB_DISTRIBUTOR='Kyon'"
+        echo "GRUB_CMDLINE_LINUX_DEFAULT='${CMD}'"
+        echo "GRUB_CMDLINE_LINUX=''"
+    } > /etc/default/grub
+    chmod 644 /etc/default/grub
+}
+
+install_grub() {
+    log "installing GRUB (${FW})"
+    write_grub_default
+    if [ "$FW" = efi ]; then
+        mkdir -p /boot/EFI
+        grub-install --target=x86_64-efi --efi-directory=/boot \
+            --bootloader-id=kyonlinux --recheck --force \
+            || fail "grub-install (efi) failed"
+        # Removable-media fallback so the firmware can also boot BOOTX64.EFI.
+        mkdir -p /boot/EFI/BOOT
+        cp /boot/EFI/kyonlinux/grubx64.efi /boot/EFI/BOOT/BOOTX64.EFI \
+            || warn "could not copy GRUB fallback BOOTX64.EFI"
+    else
+        local disk
+        disk=$(resolve_disk) || fail "could not determine install disk for grub-install"
+        log "grub-install bios disk=${disk}"
+        # Belt-and-braces: re-run the GPT backup-header repair right before
+        # the install (idempotent; no-op on healthy and MBR disks).
+        repair_gpt_backup "$disk"
+        grub-install --target=i386-pc --recheck --force "$disk" \
+            || fail "grub-install (bios) failed on ${disk}"
+    fi
+    grub-mkconfig -o /boot/grub/grub.cfg || fail "grub-mkconfig failed"
+    log "GRUB installed and grub.cfg generated"
+}
+
+write_limine_conf() {
+    # limine.conf on the boot volume (the ESP on UEFI, the root partition on
+    # BIOS). boot(): = the volume the config is on, so kernel paths are
+    # volume-relative: /vmlinuz-... on the ESP (UEFI), /boot/vmlinuz-... on
+    # the root partition (BIOS). The paths are stable: mkinitcpio rewrites
+    # the images in place on every kernel update, so no limine-entry-tool is
+    # needed and the hooks cannot break inside the chroot.
+    local conf=/boot/limine.conf kprefix n=0 name
+    if [ "$FW" = efi ]; then kprefix="boot():"; else kprefix="boot():/boot"; fi
+    : > "$conf"
+    {
+        echo "timeout: 5"
+        echo "default_entry: 1"
+        echo "remember_last_entry: yes"
+        echo
+        for name in $(kernel_names); do
+            n=$((n + 1))
+            if [ "$n" -eq 1 ]; then
+                echo "/Kyon Linux"
+                fallback_name="/Kyon Linux fallback"
+            else
+                echo "/Kyon Linux (${name})"
+                fallback_name="/Kyon Linux (${name} fallback)"
+            fi
+            echo "    protocol: linux"
+            echo "    kernel_path: ${kprefix}/vmlinuz-${name}"
+            echo "    cmdline: ${CMD}"
+            echo "    module_path: ${kprefix}/initramfs-${name}.img"
+            echo
+            if [ -f "/boot/initramfs-${name}-fallback.img" ]; then
+                echo "$fallback_name"
+                echo "    protocol: linux"
+                echo "    kernel_path: ${kprefix}/vmlinuz-${name}"
+                echo "    cmdline: ${CMD}"
+                echo "    module_path: ${kprefix}/initramfs-${name}-fallback.img"
+                echo
+            fi
+        done
+    } > "$conf"
+    [ "$n" -ge 1 ] || fail "no kernels found to write limine.conf"
+    log "limine.conf written (${n} kernel(s))"
+}
+
+install_limine() {
+    log "installing Limine (${FW})"
+    # The limine package ships no alpm hooks (limine-mkinitcpio-hook and
+    # limine-entry-tool do, and their tools cannot work inside a chroot), so
+    # only the plain limine + efibootmgr packages are used.
+    if ! pacman -S --noconfirm --needed limine efibootmgr; then
+        # pacman failed; fall back to the files the live image copied in via
+        # unpackfs (the live ISO ships the limine package).
+        warn "could not pacman-install limine; using live-image files"
+    fi
+    # The files we actually need must exist, whether they came from pacman
+    # or from the live image. (A `pacman -Qq limine` check would wrongly
+    # fail the live-image fallback path: unpackfs copies files but does not
+    # register packages in the target's pacman database.)
+    if [ "$FW" = efi ]; then
+        [ -e /usr/share/limine/BOOTX64.EFI ] || fail "limine BOOTX64.EFI is missing from the target"
+    else
+        [ -e /usr/share/limine/limine-bios.sys ] || fail "limine-bios.sys is missing from the target"
+    fi
+    # Pin the ESP for any limine tooling the booted system may use later.
+    mkdir -p /etc/default
+    echo 'ESP_PATH="/boot"' > /etc/default/limine
+
+    write_limine_conf
+
+    if [ "$FW" = efi ]; then
+        # Limine >= 6 BOOT*.EFI files are self-contained UEFI applications;
+        # "installing" = copying them onto the ESP (see limine USAGE.md).
+        local esp_dev disk part
+        mkdir -p /boot/EFI/BOOT /boot/EFI/limine
+        cp /usr/share/limine/BOOTX64.EFI /boot/EFI/BOOT/BOOTX64.EFI \
+            || fail "could not copy BOOTX64.EFI to ESP"
+        cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/limine_x64.efi \
+            || fail "could not copy limine_x64.efi to ESP"
+        # Register a proper NVRAM boot entry (stale Kyon entries are removed
+        # up front by the main dispatch, before any bootloader install).
+        if [ -d /sys/firmware/efi/efivars ] && command -v efibootmgr >/dev/null 2>&1; then
+            esp_dev=$(resolve_esp_dev)
+            if [ -n "$esp_dev" ]; then
+                disk=$(disk_of "$esp_dev")
+                part=$(printf '%s' "$esp_dev" | grep -oE '[0-9]+$')
+                if [ -n "$disk" ] && [ -n "$part" ]; then
+                    if efibootmgr -c -d "$disk" -p "$part" -L "Kyon Linux" \
+                        -l '\EFI\limine\limine_x64.efi' >/dev/null 2>&1; then
+                        log "registered UEFI boot entry 'Kyon Linux' (${esp_dev})"
+                    else
+                        warn "efibootmgr could not register limine (${esp_dev})"
+                    fi
+                else
+                    warn "could not parse ESP device ${esp_dev}"
+                fi
+            else
+                warn "could not locate ESP device; relying on BOOTX64.EFI fallback"
+            fi
+        else
+            warn "efibootmgr/efivars unavailable; relying on BOOTX64.EFI fallback"
+        fi
+    else
+        local disk ptt part
+        disk=$(resolve_disk) || fail "could not determine install disk for limine bios-install"
+        log "limine bios-install disk=${disk}"
+        # Belt-and-braces: re-run the GPT backup-header repair right before
+        # the install (idempotent; no-op on healthy and MBR disks). This is
+        # the exact fix for "Secondary header not valid, aborting" - the
+        # repair must have run immediately before limine touches the disk.
+        repair_gpt_backup "$disk"
+        cp /usr/share/limine/limine-bios.sys /boot/limine-bios.sys \
+            || fail "could not copy limine-bios.sys to /boot"
+        # On GPT disks limine requires the 1-based number of the BIOS boot
+        # partition as a SECOND argument (per limine USAGE.md). Without it
+        # limine would prompt on stdin - and with no TTY inside Calamares a
+        # prompt hangs the install forever. ensure_bios_boot() has already
+        # created/found the EF02 (bios_grub) partition, so find its number.
+        ptt=$(blkid -s PTTYPE -o value "$disk" 2>/dev/null)
+        if [ "$ptt" = gpt ]; then
+            part=$(parted -s "$disk" print 2>/dev/null | awk '/bios_grub/ { print $1; exit }')
+            if [ -z "$part" ]; then
+                # PARTTYPENAME can contain a space ("BIOS boot partition"),
+                # so match the whole line, not a single field.
+                part=$(lsblk -rno NAME,PARTTYPENAME "$disk" 2>/dev/null \
+                    | awk -v d="$(basename "$disk")" '$0 ~ /BIOS boot/ { p=$1; sub("^"d, "", p); sub("^p", "", p); print p; exit }')
+            fi
+            [ -n "$part" ] || fail "GPT disk ${disk} has no BIOS boot partition to install limine into"
+            log "limine bios-install stage2 partition=${part}"
+            limine bios-install "$disk" "$part" || fail "limine bios-install failed on ${disk}"
+        else
+            limine bios-install "$disk" || fail "limine bios-install failed on ${disk}"
+        fi
+        log "limine BIOS installed on ${disk}"
+    fi
+    log "Limine installed"
+}
+
+install_systemd_boot() {
+    log "installing systemd-boot (UEFI)"
+    bootctl --esp-path=/boot install \
+        || bootctl --esp-path=/boot --no-variables install \
+        || fail "bootctl install failed"
+    # Static loader entries with the stable /vmlinuz-<name> paths; kernel
+    # updates rewrite the images in place so this stays valid.
+    mkdir -p /boot/loader/entries
+    {
+        echo "default kyon.conf"
+        echo "timeout 5"
+        echo "console-mode auto"
+    } > /boot/loader/loader.conf
+    local n=0 name
+    for name in $(kernel_names); do
+        n=$((n + 1))
+        if [ "$n" -eq 1 ]; then title="Kyon Linux"; fname="kyon.conf"; else title="Kyon Linux (${name})"; fname="kyon-${name}.conf"; fi
+        {
+            echo "title   ${title}"
+            echo "linux   /vmlinuz-${name}"
+            echo "initrd  /initramfs-${name}.img"
+            echo "options ${CMD}"
+        } > "/boot/loader/entries/${fname}"
+        # The default entry must match the FIRST kernel's file (kyon.conf),
+        # not whatever the loop's last iteration wrote.
+        if [ "$n" -eq 1 ]; then
+            sed -i "s/^default .*/default ${fname}/" /boot/loader/loader.conf
+        fi
+    done
+    [ "$n" -ge 1 ] || fail "no kernels found to write loader entries"
+    log "systemd-boot installed with ${n} entry(ies)"
+}
+
+install_refind() {
+    log "installing rEFInd (UEFI)"
+    local esp_dev
+    esp_dev=$(resolve_esp_dev) || fail "could not determine ESP device for refind-install"
+    log "refind-install --usedefault ${esp_dev}"
+    refind-install --usedefault "$esp_dev" || fail "refind-install failed"
+    log "rEFInd installed"
+}
+
+# ---------------------------------------------------------------------------
+# 3. Universal cleanup (runs for EVERY choice).
+# ---------------------------------------------------------------------------
+
+# Remove stale UEFI NVRAM entries left by earlier installs of Kyon Linux
+# (this build's bootloader module force-installed GRUB on BIOS installs and
+# earlier broken installs left GRUB/others behind on UEFI). Only entries
+# whose label matches our own names are removed - foreign OS entries are kept.
+nvram_cleanup() {
+    local line num
+    while IFS= read -r line; do
+        case "$line" in
+            Boot*) ;;
+            *) continue ;;
+        esac
+        if printf '%s' "$line" | grep -qiE 'kyonlinux|Kyon Linux|Linux Boot Manager'; then
+            num=$(printf '%s' "$line" | grep -oE '^Boot[0-9A-Fa-f]{4}' | sed 's/^Boot//')
+            if [ -n "$num" ]; then
+                efibootmgr -B -b "$num" >/dev/null 2>&1 && log "removed stale NVRAM entry Boot${num}"
+            fi
+        fi
+    done < <(efibootmgr -v 2>/dev/null)
+}
+
+# Remove the files of bootloaders that were NOT chosen, so leftovers (e.g.
+# GRUB forced in by a previous install, or limine carried over from the live
+# image by unpackfs) can never be booted by accident.
+cleanup_other_loaders() {
+    case "$choice" in
+        grub)
+            # NOTE: /boot/EFI/BOOT/BOOTX64.EFI is deliberately NOT removed: it
+            # holds the GRUB fallback binary copied by install_grub.
+            rm -rf /boot/limine* /boot/EFI/limine \
+                /boot/loader /boot/EFI/refind 2>/dev/null
+            ;;
+        limine)
+            rm -rf /boot/grub /boot/loader /boot/EFI/refind /boot/EFI/kyonlinux 2>/dev/null
+            ;;
+        systemd-boot)
+            rm -rf /boot/grub /boot/limine* /boot/EFI/limine /boot/EFI/refind \
+                /boot/EFI/kyonlinux 2>/dev/null
+            ;;
+        refind|refind-ai)
+            rm -rf /boot/grub /boot/limine* /boot/EFI/limine /boot/loader \
+                /boot/EFI/kyonlinux 2>/dev/null
+            ;;
+    esac
+    # limine hook packages cannot work inside the chroot; drop them if a
+    # desktop/optional group pulled them in.
+    for pkg in limine-mkinitcpio-hook limine-entry-tool limine-snapper-sync; do
+        if pacman -Qq "$pkg" &>/dev/null; then
+            pacman -R --noconfirm --nodeps "$pkg" >/dev/null 2>&1
+        fi
+    done
+    rm -f /etc/mkinitcpio.conf.d/10-limine-snapper-sync.conf /etc/limine-snapper-sync.conf 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# 4. Main dispatch.
+# ---------------------------------------------------------------------------
+
+# BIOS/GPT safety net: GRUB and limine both need a BIOS boot partition on
+# GPT disks. Run before any install work so a broken layout surfaces early
+# (and is auto-repaired when possible) instead of failing mid-install.
+ensure_bios_boot
+
+# Remove stale Kyon boot entries from earlier installs before registering a
+# fresh one (UEFI only, requires writable efivars).
+if [ "$FW" = efi ] && [ -d /sys/firmware/efi/efivars ] && command -v efibootmgr >/dev/null 2>&1; then
+    nvram_cleanup
+fi
+
+case "$choice" in
+    grub)
+        install_grub
+        cleanup_other_loaders
+        ;;
+    limine)
+        install_limine
+        cleanup_other_loaders
+        ;;
+    systemd-boot)
+        if [ "$FW" != efi ]; then
+            warn "systemd-boot is UEFI-only; installing GRUB instead"
+            choice=grub
+            install_grub
+        else
+            install_systemd_boot
+            cleanup_other_loaders
+        fi
+        ;;
+    refind|refind-ai)
+        if [ "$FW" != efi ]; then
+            warn "rEFInd is UEFI-only; installing GRUB instead"
+            choice=grub
+            install_grub
+        else
+            install_refind
+            cleanup_other_loaders
+        fi
+        ;;
+    *)
+        fail "unknown bootloader choice '${choice}'"
+        ;;
+esac
+
+# Restore Kyon's os-release (the `filesystem` package replaced it with the
+# generic Arch one during the packages phase).
+bash /etc/calamares/scripts/restore-os-release
+
+log "install-bootloader: done (${choice}, ${FW})"
+exit 0

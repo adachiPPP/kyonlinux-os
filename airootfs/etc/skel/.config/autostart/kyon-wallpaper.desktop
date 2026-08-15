@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Kyon Wallpaper
+Comment=Applies the Kyon default wallpaper on first login
+Exec=/usr/local/bin/kyon-wallpaper-set
+Terminal=false
+X-KDE-autostart-phase=2
+OnlyShowIn=KDE;

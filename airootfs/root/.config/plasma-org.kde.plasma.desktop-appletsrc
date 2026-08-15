@@ -1,2 +1,31 @@
+# Kyon Linux default Plasma wallpaper - LIVE session (root).
+#
+# Containments 1-3 cover the first three screens at first login; extra
+# containments stay dormant when fewer screens are present, and Plasma
+# clones this wallpaper onto screens connected later.
+#
+# If plasmashell regenerates this file on first run and the wallpaper does
+# not show, the one-shot autostart kyon-wallpaper-set (see
+# ~/.config/autostart/kyon-wallpaper.desktop) applies it and never touches
+# the user's wallpaper afterwards.
+
+[Containments][1]
+plugin=org.kde.desktopcontainment
+
 [Containments][1][Wallpaper][org.kde.image][General]
-Image=/root/.config/kyon.png
+FillMode=2
+Image=/root/kyon.png
+
+[Containments][2]
+plugin=org.kde.desktopcontainment
+
+[Containments][2][Wallpaper][org.kde.image][General]
+FillMode=2
+Image=/root/kyon.png
+
+[Containments][3]
+plugin=org.kde.desktopcontainment
+
+[Containments][3][Wallpaper][org.kde.image][General]
+FillMode=2
+Image=/root/kyon.png

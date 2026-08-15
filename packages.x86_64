@@ -137,8 +137,16 @@ powerdevil
 plasma-nm
 plasma-pa
 kde-gtk-config
+sddm
 sddm-kcm
 dolphin
 konsole
 spectacle
 ark
+nya
+xorg-server
+xorg-xwayland
+endeavouros/calamares
+archlinux-keyring
+cachyos-keyring
+chaotic-keyring

@@ -1,1 +1,8 @@
-airootfs/etc/polkit-1/rules.d/49-calamares.rules
+/* Allow Calamares to run privileged operations without prompting for a
+ * password (the live ISO runs Calamares as root via SDDM autologin, but
+ * this also covers the case where it is launched from a non-root session). */
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.") == 0 && subject.user == "calamares") {
+        return polkit.Result.YES;
+    }
+});

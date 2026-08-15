@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+
+# Restores Kyon's /etc/os-release identity in the installed system.
+#
+# During the packages phase the `filesystem` package installs its generic
+# Arch os-release (/usr/lib/os-release + /etc/os-release symlink), so the
+# installed system would report "Arch Linux" no matter which distro this is.
+# This writes Kyon's os-release back.
+#
+# Idempotent and bootloader-independent; called from:
+#   - scripts/install-bootloader     (every install, in the chroot)
+#
+# NOTE: VERSION_ID is intentionally omitted. The airootfs template carries the
+# unsubstituted "TEMPLATE_VERSION_ID" placeholder; shipping that string into an
+# installed system is worse than having no VERSION_ID (which is spec-legal).
+# If Kyon ever gets real versioning, add it here AND in airootfs/etc/os-release.
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH}"
+
+os_release_file=/etc/os-release
+usr_os_release=/usr/lib/os-release
+
+{
+    printf '%s\n' 'NAME="Kyon Linux"'
+    printf '%s\n' 'PRETTY_NAME="Kyon Linux"'
+    printf '%s\n' 'ID=arch-based'
+    printf '%s\n' 'BUILD_ID=rolling'
+    printf '%s\n' 'ANSI_COLOR="38;2;23;147;209"'
+    printf '%s\n' 'HOME_URL="https://adachippp.github.io/kyonlinux/"'
+    printf '%s\n' 'DOCUMENTATION_URL="https://adachippp.github.io/kyonlinux/"'
+    printf '%s\n' 'SUPPORT_URL="https://adachippp.github.io/kyonlinux/"'
+    printf '%s\n' 'BUG_REPORT_URL="https://adachippp.github.io/kyonlinux/"'
+} > "$usr_os_release"
+chmod 644 "$usr_os_release"
+
+# /etc/os-release is normally the filesystem package's symlink to
+# /usr/lib/os-release (which we just rewrote) - leave it alone to avoid
+# replacing a package-owned symlink (pacman -Qkk would complain, and a future
+# `filesystem` upgrade would revert it anyway). Only overwrite a *regular*
+# /etc/os-release (e.g. if something dropped a file there).
+if [ ! -L "$os_release_file" ] && [ -e "$os_release_file" ]; then
+    cp "$usr_os_release" "$os_release_file"
+    chmod 644 "$os_release_file"
+fi
+
+exit 0

@@ -22,16 +22,27 @@ file_permissions=(
   ["/usr/local/bin/choose-mirror"]="0:0:755"
   ["/usr/local/bin/Installation_guide"]="0:0:755"
   ["/usr/local/bin/livecd-sound"]="0:0:755"
+  ["/usr/local/bin/kyon-wallpaper-set"]="0:0:755"
   ["/etc/sddm.conf.d/autologin.conf"]="0:0:644"
   ["/etc/polkit-1/rules.d/49-calamares.rules"]="0:0:644"
-  ["/root"]="0:0:750"
   ["/root/.config"]="0:0:750"
   ["/root/.config/plasma-org.kde.plasma.desktop-appletsrc"]="0:0:644"
+  ["/root/kyon.png"]="0:0:644"
+  ["/root/.config/autostart"]="0:0:750"
+  ["/root/.config/autostart/kyon-wallpaper.desktop"]="0:0:644"
+  ["/etc/skel/.config/plasma-org.kde.plasma.desktop-appletsrc"]="0:0:644"
+  ["/etc/skel/.config/autostart/kyon-wallpaper.desktop"]="0:0:644"
   ["/usr/share/wallpapers/KyonDefault"]="0:0:755"
 )
-systemd_services=(
-  'gpm.service'
-  'NetworkManager.service'
-  'systemd-resolved.service'
-  'sddm.service'
-)
+# NOTE: there is no `systemd_services` support in archiso's mkarchiso (the
+# variable below was never read - services were silently never enabled, which
+# is why SDDM/Plasma never auto-started on the live ISO). Services are enabled
+# the archiso way instead: .wants symlinks shipped in airootfs
+# (see airootfs/etc/systemd/system/{graphical.target.wants,multi-user.target.wants}/
+# and airootfs/etc/systemd/system/display-manager.service).
+#systemd_services=(
+#  'gpm.service'
+#  'NetworkManager.service'
+#  'systemd-resolved.service'
+#  'sddm.service'
+#)

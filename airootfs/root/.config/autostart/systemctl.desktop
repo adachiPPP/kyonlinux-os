@@ -3,6 +3,6 @@ Type=Application
 Name=networkmanager starter
 Comment=networkmanager
 Exec=systemctl restart NetworkManager
-Icon=calamares
+Icon=network-wired
 Terminal=false
 Categories=System;

@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# kyon-wallpaper-set - one-shot Kyon wallpaper applier.
+#
+# Runs from ~/.config/autostart/kyon-wallpaper.desktop on every KDE login,
+# but only ever acts ONCE per user (marker file), so it can never override
+# the user's own wallpaper choices later. It is the guaranteed fallback for
+# the static default in plasma-org.kde.plasma.desktop-appletsrc: if
+# plasmashell regenerates that file on first run and the wallpaper does not
+# show, this applies it over D-Bus. It runs unconditionally on the first
+# login (the static config, when honored, already set the same image, so
+# re-applying it is a no-op).
+#
+# IMPORTANT: the live ISO session logs in exactly ONCE (root autologin). If
+# this script gave up before plasmashell was ready, the wallpaper would stay
+# default for the whole live session with no second login to retry. So we
+# wait for plasmashell's D-Bus service to appear (up to ~90s) before
+# applying, and only then fall back to short retries.
+#
+# Every failure path exits 0 (KDE sessions must never fail because of this)
+# and deliberately does NOT create the marker, so the next login retries.
+
+set +e
+
+marker="$HOME/.config/kyon-wallpaper-applied"
+
+# Already handled on a previous login: never touch the wallpaper again.
+[ -f "$marker" ] && exit 0
+
+command -v plasma-apply-wallpaperimage >/dev/null 2>&1 || exit 0
+
+img=/usr/share/wallpapers/KyonDefault/contents/images/1920x1080.png
+[ -f "$img" ] || img=/root/kyon.png
+[ -f "$img" ] || exit 0
+
+# Wait for plasmashell to register its D-Bus service (autostart fires while
+# the session is still coming up; without the service the apply fails).
+deadline=$(( $(date +%s) + 90 ))
+until dbus-send --session --print-reply \
+        --dest=org.kde.plasmashell /PlasmaShell \
+        org.freedesktop.DBus.Peer.Ping >/dev/null 2>&1; do
+    [ "$(date +%s)" -ge "$deadline" ] && exit 0
+    sleep 2
+done
+
+# Apply. Current Plasma 6 accepts the image as a positional argument; some
+# builds use -i/--image. Try both - the wrong form fails fast via
+# QCommandLineParser, the right one succeeds.
+n=0
+while [ "$n" -lt 5 ]; do
+    n=$((n + 1))
+    if plasma-apply-wallpaperimage "$img" >/dev/null 2>&1 || \
+       plasma-apply-wallpaperimage -i "$img" >/dev/null 2>&1; then
+        : > "$marker"
+        exit 0
+    fi
+    [ "$n" -lt 5 ] && sleep 3
+done
+
+exit 0

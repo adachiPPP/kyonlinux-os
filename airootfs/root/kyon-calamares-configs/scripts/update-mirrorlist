@@ -1,1 +1,17 @@
+#!/usr/bin/env bash
+# Generate a fresh ranked Arch mirrorlist, then refresh the package database.
+#
+# Why: the live ISO ships no static /etc/pacman.d/mirrorlist (it was dropped
+# from the repo), and the pacman-mirrorlist package default has every Server
+# line commented out. Without a generated mirrorlist, `pacman -Sy` here - and
+# every later pacman call (keyring, db refresh, packages) - fails with "no
+# servers configured for repository". reflector ships in the ISO.
+exec 2>&1
+
+if command -v reflector &>/dev/null; then
+    # Non-fatal: if ranking fails (e.g. flaky network), fall back to whatever
+    # mirrorlist exists; `pacman -Sy` below reports the real state.
+    reflector --protocol https --latest 20 --sort rate --save /etc/pacman.d/mirrorlist || true
+fi
+
 pacman -Sy --noconfirm
