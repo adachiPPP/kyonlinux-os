@@ -1,0 +1,9 @@
+[Applications][vesktop]
+Seen=true
+
+[Applications][zen]
+Seen=true
+
+[DoNotDisturb]
+NotificationSoundsMuted=true
+Until=2027,8,14,15,31,46.971

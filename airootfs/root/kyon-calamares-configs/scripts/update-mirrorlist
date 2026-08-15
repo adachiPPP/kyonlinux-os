@@ -1,17 +1,39 @@
 #!/usr/bin/env bash
-# Generate a fresh ranked Arch mirrorlist, then refresh the package database.
-#
-# Why: the live ISO ships no static /etc/pacman.d/mirrorlist (it was dropped
-# from the repo), and the pacman-mirrorlist package default has every Server
-# line commented out. Without a generated mirrorlist, `pacman -Sy` here - and
-# every later pacman call (keyring, db refresh, packages) - fails with "no
-# servers configured for repository". reflector ships in the ISO.
+# Redirect standard error to standard output since calamares doesn't
+# capture stderr
 exec 2>&1
 
+# The live ISO ships a static /etc/pacman.d/mirrorlist (ranked at build
+# time), so pacman always has working mirrors for [core]/[extra]/[multilib].
+# Refresh it with reflector when available; if ranking fails, the shipped
+# list is kept. This step must never abort the install: later steps
+# (create-pacman-keyring, packages) surface real network problems with
+# proper output.
 if command -v reflector &>/dev/null; then
-    # Non-fatal: if ranking fails (e.g. flaky network), fall back to whatever
-    # mirrorlist exists; `pacman -Sy` below reports the real state.
-    reflector --protocol https --latest 20 --sort rate --save /etc/pacman.d/mirrorlist || true
+    # Bounded: a stuck ranking run must not hang the installer.
+    timeout 180 reflector --protocol https --latest 20 --sort rate \
+        --save /etc/pacman.d/mirrorlist || true
 fi
 
-pacman -Sy --noconfirm
+# Sanity: if for any reason there is still no mirrorlist, write a minimal
+# fallback so the rest of the install can proceed.
+if [ ! -s /etc/pacman.d/mirrorlist ]; then
+    cat > /etc/pacman.d/mirrorlist <<'EOF'
+## World-wide
+Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch
+Server = https://fastly.mirror.pkgbuild.com/$repo/os/$arch
+## Germany
+Server = https://berlin.mirror.pkgbuild.com/$repo/os/$arch
+Server = https://ftp.halifax.rwth-aachen.de/archlinux/$repo/os/$arch
+## United States
+Server = https://arch.mirror.constant.com/$repo/os/$arch
+## United Kingdom
+Server = https://london.mirror.pkgbuild.com/$repo/os/$arch
+EOF
+fi
+
+# Refresh the package databases. Non-fatal on purpose: with the static
+# mirrorlist in place the only remaining failure mode is a dead network,
+# which the keyring step (with retries) and the packages step report with
+# real output instead of aborting here silently.
+pacman -Sy --noconfirm || true

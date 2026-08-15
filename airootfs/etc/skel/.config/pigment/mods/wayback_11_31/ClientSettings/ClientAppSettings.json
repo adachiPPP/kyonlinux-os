@@ -1,0 +1,14 @@
+{
+  "FFlagHandleAltEnterFullscreenManually": "False",
+  "DFFlagTextureQualityOverrideEnabled": "True",
+  "DFFlagDisableDPIScale": "False",
+  "DFIntCSGLevelOfDetailSwitchingDistanceL12": "1166",
+  "DFIntCSGLevelOfDetailSwitchingDistanceL23": "777",
+  "DFIntCSGLevelOfDetailSwitchingDistanceL34": "388",
+  "DFIntCSGLevelOfDetailSwitchingDistance": "1555",
+  "DFIntDebugFRMQualityLevelOverride": "2",
+  "DFIntTextureQualityOverride": "3",
+  "FIntGrassMovementReducedMotionFactor": "0",
+  "FIntFRMMinGrassDistance": "0",
+  "FIntFRMMaxGrassDistance": "0"
+}

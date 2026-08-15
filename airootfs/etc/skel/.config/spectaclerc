@@ -1,0 +1,16 @@
+[Annotations]
+annotationToolType=5
+
+[General]
+ocrLanguages=afr
+
+[ImageSave]
+lastImageSaveLocation=file:///home/adachip/Pictures/Screenshots/Screenshot_20260814_232226.png
+translatedScreenshotsFolder=Screenshots
+
+[VideoSave]
+translatedScreencastsFolder=Screencasts
+
+[ViewerWindow]
+2 screens: Height=570
+2 screens: Width=821

@@ -1,0 +1,42 @@
+{
+  "name": "Default",
+  "settings": {
+    "allow_gamepad_permission": true,
+    "close_on_leave": false,
+    "discord_rpc_enabled": true,
+    "discord_rpc_show_join_button": true,
+    "enable_gamemode": true,
+    "enable_hidpi": true,
+    "enable_mobile_home_screen": false,
+    "graphics_optimization_mode": "performance",
+    "server_location_indicator_enabled": true,
+    "touch_mode": "off",
+    "use_console_experience": false,
+    "use_libsecret": false,
+    "use_opengl": false
+  },
+  "fflags": {
+    "DFIntConnectionMTUSize": 1380,
+    "DFIntGCJobFrequencyMs": 250,
+    "DFIntNetworkLatencyTolerance": 0,
+    "DFIntNetworkPrediction": 0,
+    "DFIntPhysicsStepsPerFrame": 1,
+    "DFIntRakNetResendBufferArrayLength": 64,
+    "DFIntRakNetResendTimeoutMS": 200,
+    "DFIntTaskSchedulerTargetFps": 9999,
+    "FFlagDebugDisplayFPS": true,
+    "FFlagDisableBloom": true,
+    "FFlagDisableDepthOfField": true,
+    "FFlagDisableGlobalShadows": true,
+    "FFlagDisablePostFx": true,
+    "FFlagDisableShadows": true,
+    "FFlagEnableReducedLatency": true,
+    "FFlagFastGPULightCulling3": true,
+    "FFlagLuaAppEnableLowMemoryMode": true,
+    "FFlagRenderFixFog": true,
+    "FFlagRenderOptimizedShadows": true
+  },
+  "mods": [
+    "rovamped_v611"
+  ]
+}

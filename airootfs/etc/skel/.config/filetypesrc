@@ -1,0 +1,7 @@
+[EmbedSettings]
+embed-application/json=false
+embed-application/x-docbook+xml=false
+embed-application/x-yaml=false
+embed-text/markdown=false
+embed-text/plain=false
+embed-text/x-cmake=false
