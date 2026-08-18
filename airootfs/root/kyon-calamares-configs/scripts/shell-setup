@@ -13,12 +13,50 @@ if ! command -v chsh &>/dev/null; then
     pacman -S --noconfirm --needed shadow &>/dev/null
 fi
 
-for shell in 'fish' 'zsh'; do
-    if [ -e "/bin/$shell" ] && command -v chsh &>/dev/null; then
-        chsh -s "/bin/${shell}" "$user" && break
-    fi
-done
+# Kyon defaults to zsh. /bin/zsh is always present: zsh is in the packages
+# install list and the packages step runs before this script.
+if [ -x "/bin/zsh" ] && command -v chsh &>/dev/null; then
+    chsh -s "/bin/zsh" "$user"
+fi
 
-# Don't fail the whole install just because no alternate shell was found or
-# chsh isn't available -- this step is a nice-to-have, not critical.
+# Install Oh My Zsh for the new user. The shipped /etc/skel/.zshrc sources
+# $ZSH (= ~/.oh-my-zsh), so the framework must exist for the shell to come up
+# clean. KEEP_ZSHRC=yes preserves the dotfile; CHSH=no and RUNZSH=no keep the
+# installer non-interactive. Needs curl + git, both installed by the packages
+# step that runs before this script.
+if [ -x "/bin/zsh" ] && command -v curl &>/dev/null && command -v git &>/dev/null; then
+    su -s /bin/bash "$user" -c \
+        'CHSH=no RUNZSH=no KEEP_ZSHRC=yes sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"' \
+        || true
+
+    # Sync the result back to /etc/skel so accounts created later get the
+    # same zsh + Oh My Zsh setup (the skel dotfiles reference it).
+    if [ -d "/home/${user}/.oh-my-zsh" ]; then
+        # Oh My Zsh only loads plugins from $ZSH_CUSTOM/plugins. Link the
+        # Arch-packaged ones there (the packages step installs them into
+        # /usr/share/zsh/plugins).
+        omz_plugins="/home/${user}/.oh-my-zsh/custom/plugins"
+        mkdir -p "$omz_plugins"
+        for p in zsh-autosuggestions zsh-syntax-highlighting; do
+            [ -d "/usr/share/zsh/plugins/$p" ] && ln -sfn "/usr/share/zsh/plugins/$p" "$omz_plugins/$p"
+        done
+        # fast-syntax-highlighting is not packaged in any enabled repo
+        # (renamed to zsh-fast-syntax-highlighting on AUR), so clone it the
+        # way the oh-my-zsh docs recommend. The .zshrc plugin list uses the
+        # repo dir name "fast-syntax-highlighting".
+        if [ ! -e "$omz_plugins/fast-syntax-highlighting" ]; then
+            git clone --depth 1 https://github.com/zdharma-continuum/fast-syntax-highlighting \
+                "$omz_plugins/fast-syntax-highlighting" &>/dev/null || true
+        fi
+
+        # Sync the finished setup back to /etc/skel so accounts created
+        # later get the same zsh + Oh My Zsh experience (the skel dotfiles
+        # reference it).
+        cp -a "/home/${user}/.oh-my-zsh" /etc/skel/ 2>/dev/null || true
+        cp -a "/home/${user}/.zshrc" /etc/skel/ 2>/dev/null || true
+    fi
+fi
+
+# Don't fail the whole install just because the shell setup didn't complete;
+# this step is a nice-to-have, not critical.
 exit 0

@@ -35,6 +35,13 @@ gpart
 gpm
 gptfdisk
 grml-zsh-config
+git
+curl
+zsh
+zsh-autosuggestions
+zsh-syntax-highlighting
+starship
+fastfetch
 grub
 limine
 networkmanager
@@ -144,6 +151,7 @@ konsole
 spectacle
 ark
 nya
+discover
 xorg-server
 xorg-xwayland
 endeavouros/calamares

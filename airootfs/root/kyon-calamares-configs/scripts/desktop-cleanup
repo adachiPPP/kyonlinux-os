@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+
+# Runs chrooted in the target AFTER the `packages` step. This replaces the
+# stock `displaymanager` module entirely (see shellprocess_desktop_cleanup.conf
+# for why that module is not in the sequence).
+#
+# WHY this exists:
+#   unpackfs copies the whole live airootfs into the target, and the live
+#   ISO ships Plasma + SDDM (added for the live autologin session). So EVERY
+#   install inherits plasma-desktop / sddm / kscreen / ... regardless of the
+#   desktop the user picked in the desktop chooser - the chooser groups only
+#   ADD packages, nothing removes the leak. On top of that the live ISO has
+#   SDDM enabled (display-manager.service -> sddm.service + a
+#   graphical.target.wants/sddm.service symlink), so SDDM stays enabled even
+#   when the user picked Hyprland (greetd), GNOME (gdm) or Xfce (lightdm),
+#   whose DM was never enabled.
+#
+#   This step drops the leaked KDE/Plasma stack for non-KDE desktops and
+#   enables the display manager that belongs to the chosen desktop. The
+#   choice is detected from what the packages step actually installed, so no
+#   global-storage access is needed. Everything is non-fatal: a failure to
+#   remove a package must never abort the whole install.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Packages that ship on the live ISO for the autologin Plasma session but are
+# NOT wanted by non-KDE desktops. konsole / dolphin / discover stay: they are
+# in the base install list in packages.conf and are installed for every
+# desktop on purpose.
+live_kde_pkgs="plasma-desktop sddm sddm-kcm kscreen powerdevil plasma-nm plasma-pa kde-gtk-config spectacle ark"
+
+# The live ISO ships SDDM enabled (for the root autologin). Those symlinks
+# are live-only state and must not survive into the target; the right DM is
+# enabled below instead.
+rm -f /etc/systemd/system/display-manager.service
+rm -f /etc/systemd/system/graphical.target.wants/sddm.service
+rm -f /etc/systemd/system/multi-user.target.wants/sddm.service
+
+# Remove a set of packages, only the ones actually installed, never failing
+# the install if pacman complains.
+remove_pkgs() {
+    local to_remove=""
+    for p in "$@"; do
+        if pacman -Q "$p" >/dev/null 2>&1; then
+            to_remove="$to_remove $p"
+        fi
+    done
+    [ -n "$to_remove" ] && pacman -Rns --noconfirm $to_remove >/dev/null 2>&1 || true
+}
+
+# Detect the chosen desktop by what the packages step installed. The desktop
+# groups are the only source of these packages; the live leak provides only
+# plasma/sddm, which never triggers these branches by itself.
+if pacman -Q greetd >/dev/null 2>&1; then
+    # Hyprland or Niri -> greetd (+ regreet). Drop the leaked Plasma + SDDM.
+    remove_pkgs $live_kde_pkgs
+    systemctl enable greetd >/dev/null 2>&1 || true
+elif pacman -Q gdm >/dev/null 2>&1; then
+    # GNOME -> gdm. Drop the leaked Plasma + SDDM.
+    remove_pkgs $live_kde_pkgs
+    systemctl enable gdm >/dev/null 2>&1 || true
+    # Kyon GNOME ricing: kyon wallpaper, dark color scheme and desktop icons
+    # (DING). Applied per-user with a throwaway session bus; every step is
+    # non-fatal so a missing binary never fails the install. The username is
+    # passed in as $1 (the shellprocess module expands ${USER} in the config).
+    if [ -n "${1:-}" ] && command -v runuser >/dev/null 2>&1 && command -v dbus-run-session >/dev/null 2>&1; then
+        kyon_wp="file:///usr/share/wallpapers/KyonDefault/contents/images/1920x1080.png"
+        runuser -u "$1" -- dbus-run-session -- gsettings set org.gnome.desktop.background picture-uri "$kyon_wp" >/dev/null 2>&1 || true
+        runuser -u "$1" -- dbus-run-session -- gsettings set org.gnome.desktop.background picture-uri-dark "$kyon_wp" >/dev/null 2>&1 || true
+        runuser -u "$1" -- dbus-run-session -- gsettings set org.gnome.desktop.interface color-scheme prefer-dark >/dev/null 2>&1 || true
+        runuser -u "$1" -- dbus-run-session -- gsettings set org.gnome.shell enabled-extensions "['ding@rastersoft.com']" >/dev/null 2>&1 || true
+    fi
+elif pacman -Q lightdm >/dev/null 2>&1; then
+    # Xfce / Cinnamon / MATE / Budgie -> lightdm. Drop the leaked Plasma + SDDM.
+    remove_pkgs $live_kde_pkgs
+    systemctl enable lightdm >/dev/null 2>&1 || true
+elif pacman -Q bluedevil >/dev/null 2>&1; then
+    # KDE -> keep Plasma, re-enable sddm (the leaked symlinks were removed
+    # above, so it needs to be enabled again).
+    systemctl enable sddm >/dev/null 2>&1 || true
+elif pacman -Q i3-wm >/dev/null 2>&1 || pacman -Q lxqt-session >/dev/null 2>&1 || pacman -Q lxsession >/dev/null 2>&1; then
+    # i3 / LXQt / LXDE: their groups install sddm explicitly. Drop the leaked
+    # Plasma stack but keep sddm and enable it.
+    remove_pkgs plasma-desktop sddm-kcm kscreen powerdevil plasma-nm plasma-pa kde-gtk-config spectacle ark
+    systemctl enable sddm >/dev/null 2>&1 || true
+else
+    # "No Desktop" was chosen: drop the leaked Plasma + SDDM so the system
+    # really boots into text mode as the chooser promises.
+    remove_pkgs $live_kde_pkgs
+fi
+
+exit 0

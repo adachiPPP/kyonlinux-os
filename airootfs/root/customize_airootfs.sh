@@ -41,3 +41,38 @@ done
 rm -rf /etc/calamares
 cp -a /root/kyon-calamares-configs /etc/calamares
 rm -rf /root/kyon-calamares-configs
+
+# /etc/skel/.zshrc cannot ship directly in the airootfs: grml-zsh-config
+# installs the same path, and pacman's file-conflict CHECK (before
+# extraction) does not consult NoExtract, so the ISO build aborts. Ship it
+# under /root/dotfiles instead and install it here, AFTER packages are
+# installed, so pacstrap never sees a collision.
+install -Dm644 /root/dotfiles/.zshrc /etc/skel/.zshrc
+rm -rf /root/dotfiles
+
+# Give the live root session (SDDM autologin -> Plasma) the same dotfiles as
+# /etc/skel: the live ISO is the first place the user sees their setup, and
+# without this /root has no kitty / zsh / ... configs at all, so e.g. kitty
+# opens with its default config on the live system. New users created during
+# install get the same files via the copy_skel calamares step.
+cp -a /etc/skel/. /root/
+
+# The live root session also needs the Oh My Zsh + plugin setup that
+# shell-setup applies to new users during install (the .zshrc sources
+# ~/.oh-my-zsh and starship/fastfetch binaries). Mirror it here so the live
+# ISO's zsh prompt works, not just the installed system. Non-fatal: a build
+# without network must not fail because of this.
+if [ -x /bin/zsh ] && command -v curl >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
+    CHSH=no RUNZSH=no KEEP_ZSHRC=yes sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" || true
+    if [ -d /root/.oh-my-zsh ]; then
+        omz_plugins="/root/.oh-my-zsh/custom/plugins"
+        mkdir -p "$omz_plugins"
+        for p in zsh-autosuggestions zsh-syntax-highlighting; do
+            [ -d "/usr/share/zsh/plugins/$p" ] && ln -sfn "/usr/share/zsh/plugins/$p" "$omz_plugins/$p"
+        done
+        if [ ! -e "$omz_plugins/fast-syntax-highlighting" ]; then
+            git clone --depth 1 https://github.com/zdharma-continuum/fast-syntax-highlighting \
+                "$omz_plugins/fast-syntax-highlighting" &>/dev/null || true
+        fi
+    fi
+fi

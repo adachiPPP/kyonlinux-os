@@ -364,6 +364,10 @@ write_limine_conf() {
         done
     } > "$conf"
     [ "$n" -ge 1 ] || fail "no kernels found to write limine.conf"
+    # Mirror into /boot/limine as well: limine scans boot, boot/limine,
+    # limine and the volume root for limine.conf (and limine-bios.sys).
+    mkdir -p /boot/limine
+    cp "$conf" /boot/limine/limine.conf 2>/dev/null || true
     log "limine.conf written (${n} kernel(s))"
 }
 
@@ -435,6 +439,12 @@ install_limine() {
         repair_gpt_backup "$disk"
         cp /usr/share/limine/limine-bios.sys /boot/limine-bios.sys \
             || fail "could not copy limine-bios.sys to /boot"
+        # Mirror into /boot/limine: limine scans both boot and boot/limine
+        # for limine-bios.sys, so covering both locations makes the BIOS
+        # boot robust across filesystem layouts.
+        mkdir -p /boot/limine
+        cp /usr/share/limine/limine-bios.sys /boot/limine/limine-bios.sys \
+            || warn "could not copy limine-bios.sys to /boot/limine"
         # On GPT disks limine requires the 1-based number of the BIOS boot
         # partition as a SECOND argument (per limine USAGE.md). Without it
         # limine would prompt on stdin - and with no TTY inside Calamares a
@@ -559,6 +569,23 @@ cleanup_other_loaders() {
     rm -f /etc/mkinitcpio.conf.d/10-limine-snapper-sync.conf /etc/limine-snapper-sync.conf 2>/dev/null
 }
 
+# limine's BIOS stage 2 cannot read an encrypted (LUKS) volume, and on BIOS
+# installs this installer keeps /boot inside the root volume (there is no
+# separate ESP, unlike UEFI where /boot IS the ESP). With an encrypted root
+# the limine-bios.sys file lands INSIDE the LUKS container, so stage 2 finds
+# nothing and the system panics right after stage 1/2 load with
+# "!! Stage 3 file not found!". Returns 0 when limine cannot boot.
+limine_bios_cannot_boot() {
+    # /boot on its own fstab entry = a separate unencrypted partition.
+    if awk '$2 == "/boot" { found = 1 } END { exit !found }' /etc/fstab; then
+        return 1
+    fi
+    # No separate /boot: it lives on the root volume. Encrypted root?
+    [ -s /etc/crypttab ] && return 0
+    grep -q '^/dev/mapper/' /etc/fstab && return 0
+    return 1
+}
+
 # ---------------------------------------------------------------------------
 # 4. Main dispatch.
 # ---------------------------------------------------------------------------
@@ -580,7 +607,17 @@ case "$choice" in
         cleanup_other_loaders
         ;;
     limine)
-        install_limine
+        if [ "$FW" = bios ] && limine_bios_cannot_boot; then
+            # GRUB i386-pc handles LUKS1 (partition.conf pins
+            # luksGeneration: luks1), so fall back to it instead of shipping
+            # an install that panics with "Stage 3 file not found" on the
+            # first boot.
+            warn "BIOS install with encrypted /boot: limine cannot boot from a LUKS volume; installing GRUB instead"
+            choice=grub
+            install_grub
+        else
+            install_limine
+        fi
         cleanup_other_loaders
         ;;
     systemd-boot)
