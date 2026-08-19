@@ -1,0 +1,14 @@
+{
+  "id": "desktopCommand",
+  "name": "Desktop Command",
+  "description": "A widget that displays a command output on your desktop",
+  "version": "1.3.2",
+  "author": "yayuuu",
+  "type": "desktop",
+  "capabilities": ["desktop-widget"],
+  "component": "./Widget.qml",
+  "icon": "terminal",
+  "settings": "./Settings.qml",
+  "requires_dms": ">=1.2.0",
+  "permissions": ["settings_read", "settings_write"]
+}
