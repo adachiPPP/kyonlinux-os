@@ -44,14 +44,37 @@ fail() { log "FATAL: $*"; echo "FATAL: $*" >&2; exit 1; }
 # It must run before ensure_bios_boot() (which uses sgdisk/parted) and
 # before nvram_cleanup() (which uses efibootmgr).
 ensure_tools() {
-    local t out
-    out=$(pacman -S --noconfirm --needed gptfdisk parted limine efibootmgr 2>&1) || {
-        warn "could not ensure gptfdisk/parted/limine/efibootmgr in the target"
+    local t out bl_pkg=""
+    # Install the package for the chosen bootloader (GRUB, rEFInd, Limine).
+    # systemd-boot is part of systemd, always present.
+    #
+    # IMPORTANT: Always install GRUB too — it is the universal fallback when
+    # systemd-boot / rEFInd are UEFI-only and the machine is BIOS, or when
+    # limine cannot boot from a LUKS volume on BIOS. Without grub installed,
+    # the fallback install_grub() call would fail with "command not found".
+    case "$choice" in
+        grub)       bl_pkg="grub" ;;
+        refind*)    bl_pkg="refind grub" ;;
+        limine)     bl_pkg="grub" ;;
+        systemd-boot) bl_pkg="grub" ;;
+    esac
+    out=$(pacman -S --noconfirm --needed gptfdisk parted limine efibootmgr ${bl_pkg} 2>&1) || {
+        warn "could not ensure gptfdisk/parted/limine/efibootmgr/${bl_pkg} in the target"
         log "pacman output: ${out}"
     }
-    for t in sgdisk parted limine efibootmgr; do
+    for t in sgdisk parted efibootmgr; do
         command -v "$t" >/dev/null 2>&1 || warn "$t is missing from the target system"
     done
+    # Check for the chosen bootloader's specific tool (and its fallback).
+    case "$choice" in
+        grub)           command -v grub-install >/dev/null 2>&1 || warn "grub-install is missing from the target system" ;;
+        refind*)        command -v refind-install >/dev/null 2>&1 || warn "refind-install is missing from the target system"
+                        command -v grub-install >/dev/null 2>&1 || warn "grub-install (fallback) is missing from the target system" ;;
+        limine)         command -v limine >/dev/null 2>&1 || warn "limine is missing from the target system"
+                        command -v grub-install >/dev/null 2>&1 || warn "grub-install (fallback for LUKS) is missing from the target system" ;;
+        systemd-boot)   command -v bootctl >/dev/null 2>&1 || warn "bootctl is missing from the target system"
+                        command -v grub-install >/dev/null 2>&1 || warn "grub-install (fallback) is missing from the target system" ;;
+    esac
 }
 
 : > "$LOG"
