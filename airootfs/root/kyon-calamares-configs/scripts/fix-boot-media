@@ -34,7 +34,7 @@ find_sfs() {
     done
 
     # Check every mounted filesystem from /proc/mounts (handles Ventoy's
-    # custom mount points andloop devices).
+    # custom mount points and loop devices).
     while read -r _ mountpoint _ _ _ _; do
         case "$mountpoint" in
             /proc|/sys|/dev|/run/udev|/run/lock|/tmp) continue ;;
