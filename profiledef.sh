@@ -34,15 +34,3 @@ file_permissions=(
   ["/etc/skel/.config/autostart/kyon-wallpaper.desktop"]="0:0:644"
   ["/usr/share/wallpapers/KyonDefault"]="0:0:755"
 )
-# NOTE: there is no `systemd_services` support in archiso's mkarchiso (the
-# variable below was never read - services were silently never enabled, which
-# is why SDDM/Plasma never auto-started on the live ISO). Services are enabled
-# the archiso way instead: .wants symlinks shipped in airootfs
-# (see airootfs/etc/systemd/system/{graphical.target.wants,multi-user.target.wants}/
-# and airootfs/etc/systemd/system/display-manager.service).
-#systemd_services=(
-#  'gpm.service'
-#  'NetworkManager.service'
-#  'systemd-resolved.service'
-#  'sddm.service'
-#)
