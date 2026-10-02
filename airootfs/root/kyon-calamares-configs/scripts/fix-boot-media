@@ -8,8 +8,8 @@
 # so the standard path may not exist even though the live system booted.
 #
 # This script finds airootfs.sfs (and vmlinuz-linux) wherever they are on
-# the running system and creates symlinks at the expected paths so that
-# Calamares' unpackfs module can find them.
+# the running system and creates the expected paths so that Calamares'
+# unpackfs module can find them.
 
 set -euo pipefail
 
@@ -26,25 +26,25 @@ find_sfs() {
 
     local found=""
 
-    # Search well-known mount points first (fast).
-    for dir in /run/archiso/bootmnt /run/miso /run/media /mnt /media; do
+    # Well-known archiso / Ventoy / Rufus mount points.
+    for dir in /run/archiso/bootmnt /run/miso /run/media /mnt /media /run/archiso; do
         [ -d "$dir" ] || continue
-        found=$(find "$dir" -maxdepth 5 -name "airootfs.sfs" -type f 2>/dev/null | head -1)
+        found=$(find "$dir" -maxdepth 6 -name "airootfs.sfs" -type f 2>/dev/null | head -1)
         [ -n "$found" ] && { echo "$found"; return 0; }
     done
 
     # Check every mounted filesystem from /proc/mounts (handles Ventoy's
-    # custom mount points and loop devices).
+    # custom mount points, loop devices, FUSE mounts, etc.).
     while read -r _ mountpoint _ _ _ _; do
         case "$mountpoint" in
             /proc|/sys|/dev|/run/udev|/run/lock|/tmp) continue ;;
         esac
         [ -d "$mountpoint" ] || continue
-        found=$(find "$mountpoint" -maxdepth 5 -name "airootfs.sfs" -type f 2>/dev/null | head -1)
+        found=$(find "$mountpoint" -maxdepth 6 -name "airootfs.sfs" -type f 2>/dev/null | head -1)
         [ -n "$found" ] && { echo "$found"; return 0; }
     done < /proc/mounts
 
-    # Last resort: broad search from / (skipping /proc /sys /dev).
+    # Broad search from / (skipping virtual filesystems).
     found=$(find / -path /proc -prune -o -path /sys -prune -o -path /dev -prune \
         -o -name "airootfs.sfs" -type f -print 2>/dev/null | head -1)
     [ -n "$found" ] && { echo "$found"; return 0; }
@@ -63,38 +63,55 @@ find_vmlinuz() {
     # If we found the squashfs, look for vmlinuz nearby first.
     if [ -n "${SFS_FOUND:-}" ]; then
         search_root=$(dirname "$SFS_FOUND")
-        found=$(find "$search_root" -maxdepth 4 -name "vmlinuz-linux" -type f 2>/dev/null | head -1)
-        [ -n "$found" ] && { echo "$found"; return 0; }
+        # Walk up to the ISO root (airootfs.sfs is usually at arch/x86_64/,
+        # vmlinuz is at arch/boot/x86_64/ — go up a few levels).
+        while [ "$search_root" != "/" ] && [ "$search_root" != "$search_root/.." ]; do
+            found=$(find "$search_root" -maxdepth 5 -name "vmlinuz-linux" -type f 2>/dev/null | head -1)
+            [ -n "$found" ] && { echo "$found"; return 0; }
+            search_root=$(dirname "$search_root")
+        done
     fi
 
-    # Fall back to the same broad search.
-    for dir in /run/archiso/bootmnt /run/miso /run/media /mnt /media; do
+    # Fall back to well-known mount points.
+    for dir in /run/archiso/bootmnt /run/miso /run/media /mnt /media /run/archiso; do
         [ -d "$dir" ] || continue
-        found=$(find "$dir" -maxdepth 5 -name "vmlinuz-linux" -type f 2>/dev/null | head -1)
+        found=$(find "$dir" -maxdepth 6 -name "vmlinuz-linux" -type f 2>/dev/null | head -1)
         [ -n "$found" ] && { echo "$found"; return 0; }
     done
 
+    # Check every mounted filesystem.
     while read -r _ mountpoint _ _ _ _; do
         case "$mountpoint" in
             /proc|/sys|/dev|/run/udev|/run/lock|/tmp) continue ;;
         esac
         [ -d "$mountpoint" ] || continue
-        found=$(find "$mountpoint" -maxdepth 5 -name "vmlinuz-linux" -type f 2>/dev/null | head -1)
+        found=$(find "$mountpoint" -maxdepth 6 -name "vmlinuz-linux" -type f 2>/dev/null | head -1)
         [ -n "$found" ] && { echo "$found"; return 0; }
     done < /proc/mounts
 
     return 1
 }
 
-# ── 3. Create symlinks ────────────────────────────────────────────────────
+# ── 3. Create the expected paths ──────────────────────────────────────────
 
-link_if_needed() {
-    local target="$1" link_path="$2"
-    [ -f "$link_path" ] && return 0          # already exists
-    [ -f "$target" ]   || return 1            # source missing
-    mkdir -p "$(dirname "$link_path")"
-    ln -sf "$target" "$link_path"
-    log "symlinked $link_path -> $target"
+place_file() {
+    local src="$1" dest="$2"
+    if [ -f "$dest" ]; then
+        log "already exists: $dest"
+        return 0
+    fi
+    [ -f "$src" ] || return 1
+    mkdir -p "$(dirname "$dest")"
+    # Use a hard link when possible (works across the same filesystem and
+    # avoids dangling symlink issues); fall back to symlink.
+    if ln "$src" "$dest" 2>/dev/null; then
+        log "linked $dest -> $src"
+    elif ln -sf "$src" "$dest" 2>/dev/null; then
+        log "symlinked $dest -> $src"
+    else
+        # Last resort: copy the file.
+        cp -f "$src" "$dest" && log "copied $dest <- $src"
+    fi
 }
 
 SFS_FOUND=""
@@ -106,13 +123,13 @@ if [ -z "$SFS_FOUND" ]; then
 fi
 
 log "found airootfs.sfs at $SFS_FOUND"
-link_if_needed "$SFS_FOUND" "$EXPECTED_SFS"
+place_file "$SFS_FOUND" "$EXPECTED_SFS"
 
 VMLINUXINUZ_FOUND=""
 VMLINUXINUZ_FOUND=$(find_vmlinuz) || true
 if [ -n "$VMLINUXINUZ_FOUND" ]; then
     log "found vmlinuz-linux at $VMLINUXINUZ_FOUND"
-    link_if_needed "$VMLINUXINUZ_FOUND" "$EXPECTED_VMLINUZ"
+    place_file "$VMLINUXINUZ_FOUND" "$EXPECTED_VMLINUZ"
 else
     log "WARNING: vmlinuz-linux not found (packages step will install the kernel)"
 fi

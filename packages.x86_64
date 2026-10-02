@@ -8,7 +8,7 @@ bcachefs-tools
 bind
 bolt
 brltty
-broadcom-wl
+broadcom-wl-dkms
 btrfs-progs
 clonezilla
 cloud-init
@@ -17,7 +17,6 @@ darkhttpd
 ddrescue
 dhcpcd
 diffutils
-dmidecode
 dmraid
 dnsmasq
 dosfstools
@@ -158,3 +157,4 @@ endeavouros/calamares
 archlinux-keyring
 cachyos-keyring
 chaotic-keyring
+nvidia-open
